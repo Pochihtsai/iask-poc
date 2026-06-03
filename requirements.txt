@@ -1,0 +1,10 @@
+openpyxl>=3.1
+httpx>=0.27
+pyyaml>=6.0
+# Web 後端
+fastapi>=0.110
+uvicorn[standard]>=0.27
+# BM25 fallback retrieval（純 Python、無外部 service）
+rank_bm25>=0.2
+# 直接走 OpenRouter Chat Completions API（用 httpx），不依賴 openai 或 anthropic SDK。
+# 這樣 cache_control 欄位可以直接在 JSON body 透傳，不會被 SDK 的 pydantic 過濾掉。

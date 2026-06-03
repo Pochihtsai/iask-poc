@@ -1,0 +1,28 @@
+# Render deployment config（free tier）
+# 部署：把這個 repo 連到 Render → New Web Service → 自動讀此檔
+#
+# 重要：環境變數 sync: false 表示要在 Render 介面手動填，不上 git。
+# 你 deploy 前要在 Render 介面貼 3 個值：
+#   IASK_ADMIN_USER     例：admin
+#   IASK_ADMIN_PASS     例：PSOKMC2026（建議改更強）
+#   OPENROUTER_API_KEY  從 ~/.iask_openrouter_key 拿
+#
+# 注意：free tier 沒 persistent disk，cold start / restart 後 iask.db 會清空。
+# 對 PoC「少部分人試」可接受；要持久要升 paid plan + disk。
+
+services:
+  - type: web
+    name: iask-poc
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn web.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: IASK_ADMIN_USER
+        sync: false
+      - key: IASK_ADMIN_PASS
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: IASK_MODEL
+        value: google/gemini-2.5-flash-lite

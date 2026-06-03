@@ -1,0 +1,236 @@
+// iASK 2.0 PoC 前台
+
+const STORAGE_KEY = 'iask_session';
+
+const login = document.getElementById('login');
+const chat = document.getElementById('chat');
+const loginForm = document.getElementById('login-form');
+const nameInput = document.getElementById('name-input');
+const userLabel = document.getElementById('user-label');
+const messages = document.getElementById('messages');
+const askForm = document.getElementById('ask-form');
+const qInput = document.getElementById('question-input');
+const sendBtn = document.getElementById('send-btn');
+const logoutBtn = document.getElementById('logout-btn');
+
+let session = null;
+
+function loadSession() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return;
+  try { session = JSON.parse(raw); } catch (e) { session = null; }
+}
+
+function saveSession() { localStorage.setItem(STORAGE_KEY, JSON.stringify(session)); }
+function clearSession() { localStorage.removeItem(STORAGE_KEY); session = null; }
+
+function showChat() {
+  login.classList.add('hidden');
+  chat.classList.remove('hidden');
+  userLabel.textContent = `· ${session.display_name}`;
+  qInput.focus();
+  loadHistory();
+}
+
+function showLogin() {
+  chat.classList.add('hidden');
+  login.classList.remove('hidden');
+  nameInput.focus();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+// 簡化 markdown：**bold**、`code`、[label](url)、FAQ chip、換行、條列
+function mdToHtml(s) {
+  let h = escapeHtml(s);
+  // code（避免 link/bold 與 code 交錯，先處理）
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // 外部連結 [label](url)
+  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // FAQ chip [PMC005] [TMC013] — 注意：要在外部連結之後，避免吃掉 [label](url) 的 label
+  h = h.replace(/\[([A-Z]{2,4}\d{2,4})\]/g, '<a class="faq-chip" data-faq-id="$1" href="javascript:void(0)">[$1]</a>');
+  // bold
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // ordered list: 行首數字+. 變 <li>
+  h = h.replace(/(^|\n)\s*\d+\.\s+(.+)/g, '$1<li>$2</li>');
+  // unordered list: 行首 - 或 * 變 <li>
+  h = h.replace(/(^|\n)\s*[-*]\s+(.+)/g, '$1<li>$2</li>');
+  // 把連續 <li> 包成 <ul>（粗略夠用）
+  h = h.replace(/(?:<li>.*?<\/li>\s*){2,}/g, m => `<ul>${m}</ul>`);
+  h = h.replace(/<\/li>\s*<li>/g, '</li><li>');
+  // 換行
+  h = h.replace(/\n/g, '<br>');
+  return h;
+}
+
+// ---------- FAQ modal ----------
+
+const faqModal = document.getElementById('faq-modal');
+const faqModalBody = document.getElementById('faq-modal-body');
+const faqModalClose = faqModal.querySelector('.modal-close');
+
+async function showFAQ(faqId) {
+  faqModalBody.innerHTML = '<p class="thinking">載入 ' + escapeHtml(faqId) + ' …</p>';
+  faqModal.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/faq/${encodeURIComponent(faqId)}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const d = await resp.json();
+    const linksHtml = (d.links || []).map(l =>
+      `<a href="${escapeHtml(l.url || '#')}" target="_blank" rel="noopener" class="faq-link-button">${escapeHtml(l.name || 'link')}</a>`
+    ).join('');
+    faqModalBody.innerHTML = `
+      <div class="faq-modal-header">
+        ${d.dept ? `<span class="dept-tag">${escapeHtml(d.dept)}</span>` : ''}
+        <span class="faq-id-label">[${escapeHtml(d.id)}]</span>
+      </div>
+      <h2>${escapeHtml(d.question || faqId)}</h2>
+      ${linksHtml ? `<div class="faq-links">${linksHtml}</div>` : ''}
+      <div class="faq-body">${mdToHtml(d.body || '')}</div>
+      <div class="faq-meta">來源檔案：<code>${escapeHtml(d.path)}</code></div>
+    `;
+  } catch (e) {
+    faqModalBody.innerHTML = `<p class="thinking">載入失敗：${escapeHtml(e.message)}</p>`;
+  }
+}
+
+faqModalClose.addEventListener('click', () => faqModal.classList.add('hidden'));
+faqModal.addEventListener('click', (e) => { if (e.target === faqModal) faqModal.classList.add('hidden'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') faqModal.classList.add('hidden'); });
+
+// chip 點擊 — 用 event delegation（messages 區）
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a.faq-chip');
+  if (!a) return;
+  e.preventDefault();
+  const id = a.dataset.faqId;
+  if (id) showFAQ(id);
+});
+
+function addMessage(role, text, opts = {}) {
+  const div = document.createElement('div');
+  div.className = `message ${role}`;
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
+  if (opts.thinking) {
+    bubble.innerHTML =
+      '<span class="thinking-dots"><span></span><span></span><span></span></span>' +
+      '<span class="thinking">思考中 <span class="elapsed-running">0.0</span> 秒</span>';
+  } else {
+    bubble.innerHTML = role === 'user' ? escapeHtml(text).replace(/\n/g, '<br>') : mdToHtml(text);
+  }
+  div.appendChild(bubble);
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+  return div;
+}
+
+async function loadHistory() {
+  messages.innerHTML = '';
+  if (!session) return;
+  try {
+    const resp = await fetch(`/api/history?conversation_id=${encodeURIComponent(session.conversation_id)}`);
+    if (!resp.ok) { clearSession(); showLogin(); return; }
+    const data = await resp.json();
+    for (const item of data.items) {
+      addMessage('user', item.question);
+      addMessage('bot', item.answer);
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = nameInput.value.trim();
+  if (!name) return;
+  try {
+    const resp = await fetch('/api/session', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({display_name: name}),
+    });
+    if (!resp.ok) throw new Error(`session failed: ${resp.status}`);
+    session = await resp.json();
+    saveSession();
+    showChat();
+  } catch (err) {
+    alert('進入失敗：' + err.message);
+  }
+});
+
+logoutBtn.addEventListener('click', () => {
+  if (confirm('確定要登出？對話紀錄會保留在後台，本機只清掉 session ID。')) {
+    clearSession();
+    showLogin();
+  }
+});
+
+// IME 狀態旗標（中文輸入法時按 Enter 是「確認候選字」，不該觸發送出）
+let imeComposing = false;
+qInput.addEventListener('compositionstart', () => { imeComposing = true; });
+qInput.addEventListener('compositionend',   () => { imeComposing = false; });
+
+qInput.addEventListener('keydown', (e) => {
+  // 三重守門：自家旗標 + 標準 isComposing + keyCode 229（IME 中的 Enter）
+  if (imeComposing || e.isComposing || e.keyCode === 229) return;
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    askForm.requestSubmit();
+  }
+});
+
+askForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = qInput.value.trim();
+  if (!q) return;
+  qInput.value = '';
+  qInput.disabled = true;
+  sendBtn.disabled = true;
+  addMessage('user', q);
+  const placeholder = addMessage('bot', '', {thinking: true});
+
+  // 計時：每 100ms 更新一次秒數
+  const t0 = performance.now();
+  const elapsedSpan = placeholder.querySelector('.elapsed-running');
+  const timer = setInterval(() => {
+    if (elapsedSpan) {
+      elapsedSpan.textContent = ((performance.now() - t0) / 1000).toFixed(1);
+    }
+  }, 100);
+
+  try {
+    const resp = await fetch('/api/ask', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({conversation_id: session.conversation_id, question: q}),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    clearInterval(timer);
+    const elapsedSec = ((performance.now() - t0) / 1000).toFixed(1);
+    placeholder.querySelector('.message-bubble').innerHTML =
+      mdToHtml(data.answer) + `<div class="elapsed">${elapsedSec} 秒</div>`;
+  } catch (err) {
+    clearInterval(timer);
+    placeholder.querySelector('.message-bubble').innerHTML =
+      `<span class="thinking">出錯了：${escapeHtml(err.message)}</span>`;
+  } finally {
+    qInput.disabled = false;
+    sendBtn.disabled = false;
+    qInput.focus();
+  }
+});
+
+// boot
+loadSession();
+if (session && session.conversation_id) {
+  showChat();
+} else {
+  showLogin();
+}

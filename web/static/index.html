@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iASK 2.0</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="login" class="container login-screen">
+    <h1>iASK 2.0</h1>
+    <p>ProFederal 集團內部知識助理</p>
+    <form id="login-form">
+      <input type="text" id="name-input" placeholder="請輸入您的姓名" required autofocus>
+      <button type="submit">進入</button>
+    </form>
+  </div>
+
+  <div id="chat" class="container chat-screen hidden">
+    <header>
+      <div>
+        <strong>iASK</strong>
+        <span id="user-label" class="user-label"></span>
+      </div>
+      <button id="logout-btn" class="text-btn">登出</button>
+    </header>
+    <main id="messages" class="messages"></main>
+    <footer>
+      <form id="ask-form">
+        <textarea id="question-input" placeholder="輸入問題，Enter 送出（Shift+Enter 換行）" rows="2"></textarea>
+        <button type="submit" id="send-btn">送出</button>
+      </form>
+    </footer>
+  </div>
+
+  <div id="faq-modal" class="modal hidden">
+    <div class="modal-content">
+      <button class="modal-close" aria-label="關閉">×</button>
+      <div id="faq-modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

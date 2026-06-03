@@ -1,0 +1,33 @@
+# Runtime data — 不上 GitHub
+web/iask.db
+web/iask.db-journal
+web/iask.db-shm
+web/iask.db-wal
+
+# Logs
+*.log
+/tmp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.Python
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 不 commit secrets（雙保險，雖然我們的 key 在 ~ 不在 poc/）
+.env
+.iask_openrouter_key

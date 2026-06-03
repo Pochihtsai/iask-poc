@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iASK 2.0 Admin · 相關連結規則</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container admin">
+    <header>
+      <h1>相關連結規則</h1>
+      <div class="admin-controls">
+        <button id="add-rule-btn" style="background:#1e3a8a; color:white; border-color:#1e3a8a;">+ 新增規則</button>
+        <a href="/admin">← 回查詢列表</a>
+      </div>
+    </header>
+    <p style="padding: 0 1.5rem; color:#6b7280; font-size:0.9rem;">
+      規則：當「使用者問題」或「系統答案」內出現指定關鍵字時，自動把對應連結附加到答案末尾。
+      多條規則同時符合會依序全部附上。
+    </p>
+    <main>
+      <table id="rules-table">
+        <thead>
+          <tr>
+            <th>啟用</th>
+            <th>關鍵字</th>
+            <th>比對欄位</th>
+            <th>連結名稱</th>
+            <th>連結 URL</th>
+            <th>備註</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </main>
+
+    <div id="rule-modal" class="modal hidden">
+      <div class="modal-content">
+        <button class="modal-close" aria-label="關閉">×</button>
+        <h2 id="rule-modal-title" style="margin-bottom:1rem; color:#1e3a8a;">新增規則</h2>
+        <form id="rule-form">
+          <div class="form-row" style="flex-direction:row; align-items:center;">
+            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+              <input type="checkbox" id="r-enabled" checked> 啟用
+            </label>
+          </div>
+          <div class="form-row">
+            <label>關鍵字（substring 比對、不分大小寫、至少 2 字）</label>
+            <input type="text" id="r-keyword" required minlength="2" maxlength="80" placeholder="例如：特休">
+          </div>
+          <div class="form-row">
+            <label>比對欄位</label>
+            <select id="r-match-field">
+              <option value="either">問題或答案任一（建議）</option>
+              <option value="question">只比對使用者問題</option>
+              <option value="answer">只比對系統答案</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>連結名稱</label>
+            <input type="text" id="r-link-name" required maxlength="120" placeholder="例如：請假管理作業指導書">
+          </div>
+          <div class="form-row">
+            <label>連結 URL</label>
+            <input type="url" id="r-link-url" required maxlength="2000" placeholder="https://...">
+          </div>
+          <div class="form-row">
+            <label>備註（給管理者看，不會顯示給使用者）</label>
+            <textarea id="r-note" rows="2" maxlength="500"></textarea>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="r-cancel-btn">取消</button>
+            <button type="submit">儲存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <script src="/static/rules.js"></script>
+</body>
+</html>

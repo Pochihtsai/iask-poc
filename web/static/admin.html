@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iASK 2.0 Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container admin">
+    <header>
+      <h1>iASK 2.0 Admin</h1>
+      <div class="admin-controls">
+        <input type="text" id="filter-user" placeholder="依使用者名稱過濾">
+        <input type="date" id="filter-since" title="顯示此日期之後">
+        <button id="refresh-btn">重新整理</button>
+        <a href="/admin/api/queries.csv" download>匯出 CSV</a>
+        <a href="/admin/rules" style="border-color:#1e3a8a; background:#1e3a8a; color:white;">相關連結規則 →</a>
+      </div>
+    </header>
+    <main>
+      <table id="queries-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>時間</th>
+            <th>使用者</th>
+            <th>問題</th>
+            <th>引用 FAQ</th>
+            <th>成本</th>
+            <th>耗時</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </main>
+
+    <div id="detail-modal" class="modal hidden">
+      <div class="modal-content">
+        <button class="modal-close" aria-label="關閉">×</button>
+        <div id="detail-body"></div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/admin.js"></script>
+</body>
+</html>
