@@ -132,6 +132,73 @@ def _strip_teams_mention(text: str) -> str:
     return cleaned.strip()
 
 
+class TeamsAskReq(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    user_name: str = Field(default="Teams User", max_length=120)
+
+
+@app.post("/api/teams-ask")
+def teams_ask(req: TeamsAskReq, request: Request) -> dict:
+    """簡化版 endpoint 給 Power Automate / 外部呼叫。
+    認證：shared token via X-Teams-Token header（對應 IASK_TEAMS_TOKEN env var）。
+    請求 body: {"question": "...", "user_name": "..."}
+    回應: {"answer": "...", "candidates": [...], "latency_ms": ...}
+    """
+    expected = os.environ.get("IASK_TEAMS_TOKEN", "")
+    if expected:
+        provided = request.headers.get("X-Teams-Token", "")
+        if not hmac.compare_digest(provided, expected):
+            raise HTTPException(401, "invalid X-Teams-Token")
+
+    question = AT_TAG_RE.sub("", req.question or "").strip()
+    if not question:
+        return {"answer": "請在 @ 機器人後面接您的問題。"}
+
+    with get_conn(DB_PATH) as conn:
+        user_id = get_or_create_user(conn, f"[Teams] {req.user_name}")
+        conv_id = create_conversation(conn, user_id)
+        result = engine.ask(question, history=None)
+
+        faq_links = _collect_links_from_citations(result["answer"])
+        if faq_links:
+            lines = ["", "---", "**FAQ 來源連結：**"]
+            for l in faq_links:
+                lines.append(f"- [{l['name']}]({l['url']})  · 來自 [{l['faq_id']}]")
+            result["answer"] = result["answer"] + "\n" + "\n".join(lines)
+
+        applicable = find_applicable_rules(conn, question, result["answer"])
+        if applicable:
+            lines = ["", "---", "**補充連結（管理者指定）：**"]
+            for r in applicable:
+                lines.append(f"- [{r['link_name']}]({r['link_url']})")
+            result["answer"] = result["answer"] + "\n" + "\n".join(lines)
+
+        save_query(
+            conn,
+            conversation_id=conv_id,
+            user_id=user_id,
+            question=question,
+            rewritten_question=result.get("rewritten_question"),
+            answer=result["answer"],
+            candidates=result["candidates"],
+            pages_read=result["candidates"],
+            signal_terms=result["signal_terms"],
+            reasoning=result["reasoning"],
+            model=MODEL,
+            tokens_in=result["tokens_in"],
+            tokens_cached=result["tokens_cached"],
+            tokens_out=result["tokens_out"],
+            cost_usd=result["cost_usd"],
+            latency_ms=result["latency_ms"],
+        )
+
+    return {
+        "answer": result["answer"],
+        "candidates": result["candidates"],
+        "latency_ms": result["latency_ms"],
+    }
+
+
 @app.post("/teams/webhook")
 async def teams_webhook(request: Request) -> dict:
     """Teams Outgoing Webhook 接收端：
