@@ -9,7 +9,10 @@
 """
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -19,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from fastapi import Request
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -52,6 +56,8 @@ STATIC_DIR = HERE / "static"
 MODEL = os.environ.get("IASK_MODEL", "google/gemini-2.5-flash-lite")
 ADMIN_USER = os.environ.get("IASK_ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("IASK_ADMIN_PASS")
+# Teams Outgoing Webhook security token（base64）— 空字串 = 跳過 HMAC 驗證（僅限初期 dev）
+TEAMS_SECRET = os.environ.get("IASK_TEAMS_SECRET", "")
 
 if not ADMIN_PASS:
     print("[WARN] IASK_ADMIN_PASS 未設定。後台會拒絕所有登入。"
@@ -98,6 +104,102 @@ def admin_page(_admin: str = Depends(require_admin)) -> FileResponse:
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok", "model": MODEL}
+
+
+# ---------------------------------------------------------- Teams Outgoing Webhook
+
+AT_TAG_RE = re.compile(r"<at>.*?</at>", flags=re.IGNORECASE | re.DOTALL)
+
+
+def _verify_teams_hmac(body: bytes, auth_header: str) -> bool:
+    """驗證 Teams Outgoing Webhook 的 HMAC 簽章。
+    若 TEAMS_SECRET 未設、跳過驗證（僅初期測試用）。
+    """
+    if not TEAMS_SECRET:
+        return True
+    try:
+        key = base64.b64decode(TEAMS_SECRET)
+    except Exception:
+        return False
+    digest = hmac.new(key, body, hashlib.sha256).digest()
+    expected = "HMAC " + base64.b64encode(digest).decode()
+    return hmac.compare_digest(expected, auth_header or "")
+
+
+def _strip_teams_mention(text: str) -> str:
+    """Teams 的訊息含 <at>BotName</at> 標籤，去掉它拿純使用者問題。"""
+    cleaned = AT_TAG_RE.sub("", text or "")
+    return cleaned.strip()
+
+
+@app.post("/teams/webhook")
+async def teams_webhook(request: Request) -> dict:
+    """Teams Outgoing Webhook 接收端：
+    使用者在 Teams channel `@iASK 問題` → Teams POST 到這 → 跑 ladder → 回 markdown 訊息
+    """
+    body = await request.body()
+    auth = request.headers.get("Authorization", "")
+    if not _verify_teams_hmac(body, auth):
+        raise HTTPException(401, "HMAC verification failed")
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+
+    question = _strip_teams_mention(payload.get("text") or "")
+    user_name = (payload.get("from") or {}).get("name") or "Teams User"
+
+    if not question:
+        return {
+            "type": "message",
+            "text": "請在 @iASK 後面接您的問題，例如：`@iASK 怎麼請特休？`",
+        }
+
+    # 跑 ladder + 重用既有 post-process（FAQ 連結 + 管理者規則）
+    with get_conn(DB_PATH) as conn:
+        user_id = get_or_create_user(conn, f"[Teams] {user_name}")
+        conv_id = create_conversation(conn, user_id)
+        result = engine.ask(question, history=None)
+
+        faq_links = _collect_links_from_citations(result["answer"])
+        if faq_links:
+            lines = ["", "---", "**FAQ 來源連結：**"]
+            for l in faq_links:
+                lines.append(f"- [{l['name']}]({l['url']})  · 來自 [{l['faq_id']}]")
+            result["answer"] = result["answer"] + "\n" + "\n".join(lines)
+
+        applicable = find_applicable_rules(conn, question, result["answer"])
+        if applicable:
+            lines = ["", "---", "**補充連結（管理者指定）：**"]
+            for r in applicable:
+                lines.append(f"- [{r['link_name']}]({r['link_url']})")
+            result["answer"] = result["answer"] + "\n" + "\n".join(lines)
+
+        save_query(
+            conn,
+            conversation_id=conv_id,
+            user_id=user_id,
+            question=question,
+            rewritten_question=result.get("rewritten_question"),
+            answer=result["answer"],
+            candidates=result["candidates"],
+            pages_read=result["candidates"],
+            signal_terms=result["signal_terms"],
+            reasoning=result["reasoning"],
+            model=MODEL,
+            tokens_in=result["tokens_in"],
+            tokens_cached=result["tokens_cached"],
+            tokens_out=result["tokens_out"],
+            cost_usd=result["cost_usd"],
+            latency_ms=result["latency_ms"],
+        )
+
+    return {
+        "type": "message",
+        "text": result["answer"],
+        "textFormat": "markdown",
+    }
 
 
 # ---------------------------------------------------------- 前台 API
