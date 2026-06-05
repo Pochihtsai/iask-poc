@@ -80,6 +80,9 @@ body {
   40% { opacity: 1; transform: scale(1); }
 }
 
+/* 檢索完成後、答案生成前顯示的候選 FAQ chip */
+.retrieved-chips { margin-top: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
 /* 逐字串流時的游標 */
 .stream-cursor {
   display: inline-block; width: 2px; height: 1.1em;

@@ -209,13 +209,12 @@ askForm.addEventListener('submit', async (e) => {
   const placeholder = addMessage('bot', '', {thinking: true});
   const bubble = placeholder.querySelector('.message-bubble');
 
-  // 計時：每 100ms 更新一次秒數（思考階段，首個 delta 到達前）
+  // 計時：每 100ms 更新一次秒數（思考階段，首個 delta 到達前）。
+  // 每次重查 .elapsed-running，因為 meta 階段會抽換 bubble 內容。
   const t0 = performance.now();
-  const elapsedSpan = placeholder.querySelector('.elapsed-running');
   const timer = setInterval(() => {
-    if (elapsedSpan && document.body.contains(elapsedSpan)) {
-      elapsedSpan.textContent = ((performance.now() - t0) / 1000).toFixed(1);
-    }
+    const span = bubble.querySelector('.elapsed-running');
+    if (span) span.textContent = ((performance.now() - t0) / 1000).toFixed(1);
   }, 100);
 
   const finishWith = (html) => {
@@ -261,12 +260,26 @@ askForm.addEventListener('submit', async (e) => {
           bubble.innerHTML =
             escapeHtml(acc).replace(/\n/g, '<br>') + '<span class="stream-cursor"></span>';
           messages.scrollTop = messages.scrollHeight;
+        } else if (ev.event === 'meta') {
+          // 檢索完成：把「思考中」換成進度 + 候選 FAQ chip，填補答案生成前的等待
+          if (!streaming) {
+            const cands = ev.data.candidates || [];
+            const chips = cands.map(id =>
+              `<a class="faq-chip" data-faq-id="${escapeHtml(id)}" href="javascript:void(0)">[${escapeHtml(id)}]</a>`
+            ).join(' ');
+            const head = cands.length
+              ? `已找到 ${cands.length} 篇相關 FAQ，正在整理答案 <span class="elapsed-running">0.0</span> 秒`
+              : `正在整理答案 <span class="elapsed-running">0.0</span> 秒`;
+            bubble.innerHTML =
+              '<span class="thinking-dots"><span></span><span></span><span></span></span>' +
+              `<span class="thinking">${head}</span>` +
+              (chips ? `<div class="retrieved-chips">${chips}</div>` : '');
+          }
         } else if (ev.event === 'done') {
           doneData = ev.data;
         } else if (ev.event === 'error') {
           errMsg = ev.data.message || 'unknown error';
         }
-        // event: meta — 檢索完成訊號，思考指示維持到首個 delta，無額外 UI 動作
       }
     }
 
