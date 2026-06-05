@@ -18,6 +18,7 @@ from llm_client import estimate_cost_usd, make_client  # noqa: E402
 from ladder_retriever import (  # noqa: E402
     build_bm25_index,
     ladder_query,
+    ladder_query_stream,
     load_navigation_layer,
 )
 
@@ -62,3 +63,43 @@ class LadderEngine:
             "cost_usd": cost,
             "latency_ms": latency_ms,
         }
+
+    def ask_stream(self, question: str, history: list[dict] | None = None):
+        """ask() 的 streaming 版本。generator，依序 yield：
+          ("meta",  {"candidates": [...], "signal_terms": [...]})
+          ("delta", text_piece)
+          ("done",  result_dict)   # 格式同 ask() 的回傳
+        """
+        t0 = time.monotonic()
+        for kind, payload in ladder_query_stream(
+            self.client, self.model, VAULT_DIR, question,
+            navigation_text=self.nav_text,
+            history=history,
+            bm25_index=self.bm25,
+            bm25_faq_ids=self.bm25_faq_ids,
+        ):
+            if kind == "meta":
+                yield ("meta", {
+                    "candidates": payload.get("candidate_ids_found")
+                    or payload.get("candidate_ids_requested", []),
+                    "signal_terms": payload.get("signal_terms", []),
+                })
+            elif kind == "delta":
+                yield ("delta", payload)
+            elif kind == "done":
+                answer, usage, debug = payload
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                cost = estimate_cost_usd(self.model, usage)
+                yield ("done", {
+                    "answer": answer,
+                    "candidates": debug["candidate_ids_found"],
+                    "candidates_requested": debug.get("candidate_ids_requested", []),
+                    "signal_terms": debug["signal_terms"],
+                    "reasoning": debug.get("reasoning", ""),
+                    "rewritten_question": debug.get("rewritten_question", question),
+                    "tokens_in": usage["input"],
+                    "tokens_cached": usage["cached_input"],
+                    "tokens_out": usage["output"],
+                    "cost_usd": cost,
+                    "latency_ms": latency_ms,
+                })

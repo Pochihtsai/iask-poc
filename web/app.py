@@ -25,7 +25,7 @@ import yaml
 from fastapi import Request
 
 from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -354,6 +354,104 @@ def ask(req: AskReq) -> dict:
         "candidates": result["candidates"],
         "latency_ms": result["latency_ms"],
     }
+
+
+def _sse(event: str, data: dict) -> str:
+    """格式化單一 SSE 事件。"""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.post("/api/ask/stream")
+def ask_stream(req: AskReq) -> StreamingResponse:
+    """/api/ask 的 streaming 版：以 SSE 把答案逐塊吐出。
+
+    事件序列：
+      event: meta   data: {"candidates": [...], "signal_terms": [...]}
+      event: delta  data: {"text": "..."}          （多筆，answerer 逐塊）
+      event: done   data: {"id", "answer", "candidates", "latency_ms"}
+      event: error  data: {"message": "..."}        （出錯時）
+
+    答案的 LLM 本體會逐塊 stream；FAQ 來源連結與管理者規則在最後一次性附加，
+    並與 /api/ask 用相同邏輯寫進 DB，done 事件帶回含連結的完整答案。
+    """
+    # 前置 DB 讀取（快、先做掉再進 stream）
+    with get_conn(DB_PATH) as conn:
+        conv = get_conversation(conn, req.conversation_id)
+        if not conv:
+            raise HTTPException(404, "conversation not found")
+        user_id = conv["user_id"]
+        prior_rows = list_history(conn, req.conversation_id)
+
+    question = req.question.strip()
+    recent = prior_rows[-HISTORY_WINDOW_PAIRS:] if prior_rows else []
+    history = [{"question": r["question"], "answer": r["answer"]} for r in recent]
+
+    def gen():
+        try:
+            done_result = None
+            for kind, payload in engine.ask_stream(question, history=history):
+                if kind == "meta":
+                    yield _sse("meta", payload)
+                elif kind == "delta":
+                    yield _sse("delta", {"text": payload})
+                elif kind == "done":
+                    done_result = payload
+
+            if done_result is None:
+                yield _sse("error", {"message": "no result from engine"})
+                return
+
+            result = done_result
+            # 後處理：FAQ 來源連結（讀檔，不需 DB）
+            faq_links = _collect_links_from_citations(result["answer"])
+            if faq_links:
+                lines = ["", "---", "**FAQ 來源連結：**"]
+                for l in faq_links:
+                    lines.append(f"- [{l['name']}]({l['url']})  · 來自 [{l['faq_id']}]")
+                result["answer"] = result["answer"] + "\n" + "\n".join(lines)
+
+            # 管理者規則 + 寫入 DB
+            with get_conn(DB_PATH) as conn:
+                applicable = find_applicable_rules(conn, question, result["answer"])
+                if applicable:
+                    lines = ["", "---", "**補充連結（管理者指定）：**"]
+                    for r in applicable:
+                        lines.append(f"- [{r['link_name']}]({r['link_url']})")
+                    result["answer"] = result["answer"] + "\n" + "\n".join(lines)
+
+                qid = save_query(
+                    conn,
+                    conversation_id=req.conversation_id,
+                    user_id=user_id,
+                    question=question,
+                    rewritten_question=result.get("rewritten_question"),
+                    answer=result["answer"],
+                    candidates=result["candidates"],
+                    pages_read=result["candidates"],
+                    signal_terms=result["signal_terms"],
+                    reasoning=result["reasoning"],
+                    model=MODEL,
+                    tokens_in=result["tokens_in"],
+                    tokens_cached=result["tokens_cached"],
+                    tokens_out=result["tokens_out"],
+                    cost_usd=result["cost_usd"],
+                    latency_ms=result["latency_ms"],
+                )
+
+            yield _sse("done", {
+                "id": qid,
+                "answer": result["answer"],
+                "candidates": result["candidates"],
+                "latency_ms": result["latency_ms"],
+            })
+        except Exception as e:  # noqa: BLE001 — stream 內錯誤要轉成 error 事件給前端
+            yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 FAQ_ID_RE = re.compile(r"^[A-Z]{2,4}\d{2,4}$")

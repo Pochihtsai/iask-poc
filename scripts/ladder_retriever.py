@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from llm_client import build_system_blocks, call as llm_call
+from llm_client import build_system_blocks, call as llm_call, call_stream
 
 try:
     from rank_bm25 import BM25Okapi
@@ -277,27 +277,27 @@ def rewrite_question(
         return question, usage
 
 
-def ladder_query(
+def _select_candidates(
     client: Any,
     model: str,
     vault_dir: Path,
     question: str,
-    navigation_text: str | None = None,
-    history: list[dict] | None = None,
-    bm25_index: Any = None,
-    bm25_faq_ids: list[str] | None = None,
-) -> tuple[str, dict, dict]:
-    """
-    執行完整 6-step ladder（含對話脈絡）。回傳 (answer, total_usage, debug_info)。
+    navigation_text: str | None,
+    history: list[dict] | None,
+    bm25_index: Any,
+    bm25_faq_ids: list[str] | None,
+) -> dict:
+    """跑 Rewriter + Selector（+ BM25 fallback）並載入候選 FAQ 全文。
 
-    history: 近 N 對 Q&A，格式 [{"question": str, "answer": str}, ...]（舊到新）。
-      若非空，會先跑 Rewriter 把當前問題改寫成 standalone 再進 selector；
-      answerer 會額外帶歷史對話訊息為語氣連貫。
+    這是 ladder_query 與 ladder_query_stream 共用的「檢索階段」。answerer（Step C）
+    由各 caller 自己決定要一次回（call）還是 streaming（call_stream）。
 
-    debug_info 含:
-      - signal_terms / candidate_ids_requested / candidate_ids_found / reasoning
-      - rewritten_question: rewriter 改寫後（無歷史時等於原問題）
-      - original_question
+    回傳 dict：
+      pre_usage              rewriter + selector 累計 usage
+      debug                  debug_info（含 candidate_ids_found）
+      cold_answer            無候選 / 載入失敗時的訊息字串；否則 None
+      answerer_system_blocks 給 answerer 的 system blocks（cold 時 None）
+      answerer_messages      給 answerer 的 messages（cold 時 []）
     """
     if navigation_text is None:
         navigation_text = load_navigation_layer(vault_dir)
@@ -335,6 +335,7 @@ def ladder_query(
         "bm25_fallback_used": False,
         "bm25_candidates": [],
     }
+    pre_usage = _sum_usage(rewriter_usage, selector_usage)
 
     # 0 candidates → 先試 BM25 fallback、真不行才走 cold path
     if not candidate_ids and bm25_index is not None:
@@ -350,25 +351,28 @@ def ladder_query(
             "目前 FAQ 沒有這題的明確答案，建議洽詢相關部門。\n\n"
             f"_（檢索器回報：{reasoning}）_"
         )
-        zero = {"input": 0, "cached_input": 0, "output": 0, "total": 0}
-        return (
-            cold_answer,
-            _sum_usage(_sum_usage(rewriter_usage, selector_usage), zero),
-            debug,
-        )
+        return {
+            "pre_usage": pre_usage,
+            "debug": debug,
+            "cold_answer": cold_answer,
+            "answerer_system_blocks": None,
+            "answerer_messages": [],
+        }
 
     # 載入候選 FAQ 全文
     faq_text, found_ids = load_faq_by_ids(vault_dir, candidate_ids)
     debug["candidate_ids_found"] = found_ids
 
     if not faq_text:
-        return (
-            "檢索器找到候選 FAQ ID 但檔案載入失敗，請洽系統管理員。",
-            _sum_usage(rewriter_usage, selector_usage),
-            debug,
-        )
+        return {
+            "pre_usage": pre_usage,
+            "debug": debug,
+            "cold_answer": "檢索器找到候選 FAQ ID 但檔案載入失敗，請洽系統管理員。",
+            "answerer_system_blocks": None,
+            "answerer_messages": [],
+        }
 
-    # Step C: answerer — 帶歷史（為語氣連貫），question 用原始問題
+    # Step C 準備：answerer 帶歷史（為語氣連貫），question 用原始問題
     answerer_system_blocks = build_system_blocks(
         ANSWERER_INSTRUCTIONS,
         "<SELECTED_FAQS>\n" + faq_text + "\n</SELECTED_FAQS>",
@@ -380,16 +384,103 @@ def ladder_query(
             answerer_messages.append({"role": "assistant", "content": h["answer"]})
     answerer_messages.append({"role": "user", "content": question})
 
+    return {
+        "pre_usage": pre_usage,
+        "debug": debug,
+        "cold_answer": None,
+        "answerer_system_blocks": answerer_system_blocks,
+        "answerer_messages": answerer_messages,
+    }
+
+
+def ladder_query(
+    client: Any,
+    model: str,
+    vault_dir: Path,
+    question: str,
+    navigation_text: str | None = None,
+    history: list[dict] | None = None,
+    bm25_index: Any = None,
+    bm25_faq_ids: list[str] | None = None,
+) -> tuple[str, dict, dict]:
+    """
+    執行完整 6-step ladder（含對話脈絡）。回傳 (answer, total_usage, debug_info)。
+
+    history: 近 N 對 Q&A，格式 [{"question": str, "answer": str}, ...]（舊到新）。
+      若非空，會先跑 Rewriter 把當前問題改寫成 standalone 再進 selector；
+      answerer 會額外帶歷史對話訊息為語氣連貫。
+
+    debug_info 含:
+      - signal_terms / candidate_ids_requested / candidate_ids_found / reasoning
+      - rewritten_question: rewriter 改寫後（無歷史時等於原問題）
+      - original_question
+    """
+    sel = _select_candidates(
+        client, model, vault_dir, question,
+        navigation_text, history, bm25_index, bm25_faq_ids,
+    )
+    debug = sel["debug"]
+    if sel["cold_answer"] is not None:
+        return sel["cold_answer"], sel["pre_usage"], debug
+
     final_answer, answerer_usage = llm_call(
         client,
         model,
-        answerer_system_blocks,
-        answerer_messages,
+        sel["answerer_system_blocks"],
+        sel["answerer_messages"],
         max_tokens=2048,
     )
-
-    total = _sum_usage(_sum_usage(rewriter_usage, selector_usage), answerer_usage)
+    total = _sum_usage(sel["pre_usage"], answerer_usage)
     return final_answer, total, debug
+
+
+def ladder_query_stream(
+    client: Any,
+    model: str,
+    vault_dir: Path,
+    question: str,
+    navigation_text: str | None = None,
+    history: list[dict] | None = None,
+    bm25_index: Any = None,
+    bm25_faq_ids: list[str] | None = None,
+) -> Any:
+    """ladder_query 的 streaming 版本。generator，依序 yield：
+      ("meta", debug)                  selector 完成（debug 含 candidate_ids_found）
+      ("delta", text_piece)            answerer 逐塊吐出的答案
+      ("done", (answer, usage, debug)) 結束（answer 為完整答案、usage 為總用量）
+
+    cold path（無候選 / 載入失敗）：meta → 單一 delta（整段訊息）→ done。
+    """
+    sel = _select_candidates(
+        client, model, vault_dir, question,
+        navigation_text, history, bm25_index, bm25_faq_ids,
+    )
+    debug = sel["debug"]
+    yield ("meta", debug)
+
+    if sel["cold_answer"] is not None:
+        yield ("delta", sel["cold_answer"])
+        yield ("done", (sel["cold_answer"], sel["pre_usage"], debug))
+        return
+
+    pieces: list[str] = []
+    answerer_usage = {"input": 0, "cached_input": 0, "output": 0, "total": 0}
+    for kind, payload in call_stream(
+        client,
+        model,
+        sel["answerer_system_blocks"],
+        sel["answerer_messages"],
+        max_tokens=2048,
+    ):
+        if kind == "delta":
+            pieces.append(payload)
+            yield ("delta", payload)
+        elif kind == "usage":
+            answerer_usage = payload
+
+    final_answer = "".join(pieces)
+    total = _sum_usage(sel["pre_usage"], answerer_usage)
+    yield ("done", (final_answer, total, debug))
 
 
 def _sum_usage(a: dict, b: dict) -> dict:

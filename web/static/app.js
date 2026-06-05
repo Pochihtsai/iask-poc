@@ -185,6 +185,19 @@ qInput.addEventListener('keydown', (e) => {
   }
 });
 
+// 解析單一 SSE 事件區塊（以空白行分隔）成 {event, data}
+function parseSSE(raw) {
+  let event = 'message';
+  const dataLines = [];
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+  }
+  if (!dataLines.length) return null;
+  try { return {event, data: JSON.parse(dataLines.join('\n'))}; }
+  catch (e) { return null; }
+}
+
 askForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const q = qInput.value.trim();
@@ -194,32 +207,79 @@ askForm.addEventListener('submit', async (e) => {
   sendBtn.disabled = true;
   addMessage('user', q);
   const placeholder = addMessage('bot', '', {thinking: true});
+  const bubble = placeholder.querySelector('.message-bubble');
 
-  // 計時：每 100ms 更新一次秒數
+  // 計時：每 100ms 更新一次秒數（思考階段，首個 delta 到達前）
   const t0 = performance.now();
   const elapsedSpan = placeholder.querySelector('.elapsed-running');
   const timer = setInterval(() => {
-    if (elapsedSpan) {
+    if (elapsedSpan && document.body.contains(elapsedSpan)) {
       elapsedSpan.textContent = ((performance.now() - t0) / 1000).toFixed(1);
     }
   }, 100);
 
+  const finishWith = (html) => {
+    clearInterval(timer);
+    bubble.classList.remove('streaming');
+    bubble.innerHTML = html;
+    messages.scrollTop = messages.scrollHeight;
+  };
+
+  let acc = '';        // 已累積的答案文字
+  let streaming = false;
+
   try {
-    const resp = await fetch('/api/ask', {
+    const resp = await fetch('/api/ask/stream', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({conversation_id: session.conversation_id, question: q}),
     });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    clearInterval(timer);
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let doneData = null;
+    let errMsg = null;
+
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const ev = parseSSE(buf.slice(0, idx));
+        buf = buf.slice(idx + 2);
+        if (!ev) continue;
+        if (ev.event === 'delta') {
+          if (!streaming) {           // 首個 delta：清掉「思考中」、進入逐字模式
+            streaming = true;
+            bubble.classList.add('streaming');
+            bubble.innerHTML = '';
+          }
+          acc += ev.data.text || '';
+          bubble.innerHTML =
+            escapeHtml(acc).replace(/\n/g, '<br>') + '<span class="stream-cursor"></span>';
+          messages.scrollTop = messages.scrollHeight;
+        } else if (ev.event === 'done') {
+          doneData = ev.data;
+        } else if (ev.event === 'error') {
+          errMsg = ev.data.message || 'unknown error';
+        }
+        // event: meta — 檢索完成訊號，思考指示維持到首個 delta，無額外 UI 動作
+      }
+    }
+
     const elapsedSec = ((performance.now() - t0) / 1000).toFixed(1);
-    placeholder.querySelector('.message-bubble').innerHTML =
-      mdToHtml(data.answer) + `<div class="elapsed">${elapsedSec} 秒</div>`;
+    if (errMsg) {
+      finishWith(`<span class="thinking">出錯了：${escapeHtml(errMsg)}</span>`);
+    } else {
+      // done 事件帶回含來源連結的完整答案；萬一沒收到 done 就用已累積內容收尾
+      const finalAnswer = doneData ? doneData.answer : acc;
+      finishWith(mdToHtml(finalAnswer) + `<div class="elapsed">${elapsedSec} 秒</div>`);
+    }
   } catch (err) {
-    clearInterval(timer);
-    placeholder.querySelector('.message-bubble').innerHTML =
-      `<span class="thinking">出錯了：${escapeHtml(err.message)}</span>`;
+    finishWith(`<span class="thinking">出錯了：${escapeHtml(err.message)}</span>`);
   } finally {
     qInput.disabled = false;
     sendBtn.disabled = false;

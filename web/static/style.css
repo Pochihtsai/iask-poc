@@ -80,6 +80,14 @@ body {
   40% { opacity: 1; transform: scale(1); }
 }
 
+/* 逐字串流時的游標 */
+.stream-cursor {
+  display: inline-block; width: 2px; height: 1.1em;
+  margin-left: 1px; vertical-align: text-bottom;
+  background: #1e3a8a; animation: cursor-blink 1s steps(2, start) infinite;
+}
+@keyframes cursor-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
 /* 答案結尾的耗時小灰字 */
 .elapsed {
   display: block; margin-top: 0.5rem;
