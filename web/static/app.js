@@ -49,9 +49,16 @@ function mdToHtml(s) {
   let h = escapeHtml(s);
   // code（避免 link/bold 與 code 交錯，先處理）
   h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // 外部連結 [label](url)
-  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // FAQ chip [PMC005] [TMC013] — 注意：要在外部連結之後，避免吃掉 [label](url) 的 label
+  // 外部連結 [label](url) → 先抽成 placeholder 保護起來。
+  // SharePoint URL 路徑會含 [LCC004] 這種字串，若不保護，後面 FAQ-chip 規則會
+  // 把 URL 裡的 [LCC004] 換成 <a> 標籤、插斷 href 屬性，導致整個連結壞掉、裸 URL 噴出。
+  const links = [];
+  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, label, url) => {
+    const i = links.length;
+    links.push(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
+    return `@@LINK${i}@@`;
+  });
+  // FAQ chip [PMC005] [TMC013]（此時外部連結已是 placeholder，不會被誤傷）
   h = h.replace(/\[([A-Z]{2,4}\d{2,4})\]/g, '<a class="faq-chip" data-faq-id="$1" href="javascript:void(0)">[$1]</a>');
   // bold
   h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -64,6 +71,8 @@ function mdToHtml(s) {
   h = h.replace(/<\/li>\s*<li>/g, '</li><li>');
   // 換行
   h = h.replace(/\n/g, '<br>');
+  // 還原外部連結
+  h = h.replace(/@@LINK(\d+)@@/g, (m, i) => links[+i]);
   return h;
 }
 
