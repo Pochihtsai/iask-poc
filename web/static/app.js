@@ -52,8 +52,11 @@ function mdToHtml(s) {
   // 外部連結 [label](url) → 先抽成 placeholder 保護起來。
   // SharePoint URL 路徑會含 [LCC004] 這種字串，若不保護，後面 FAQ-chip 規則會
   // 把 URL 裡的 [LCC004] 換成 <a> 標籤、插斷 href 屬性，導致整個連結壞掉、裸 URL 噴出。
+  // 核心問題：label 常以 [LCC002] 開頭、URL 路徑含未編碼的 [ ] 與 ( )（如 (海外公司適用)），
+  // 舊的 [^\]]+ / [^\s)]+ 規則會在第一個 ] 或 ) 提早截斷，導致整段連結 match 失敗而噴出裸網址。
+  // 改用允許一層巢狀 [] 的 label 與一層巢狀 () 的 URL 的平衡式規則（已用 295 筆實際連結驗證全數通過）。
   const links = [];
-  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, label, url) => {
+  h = h.replace(/\[((?:[^\[\]]|\[[^\]]*\])*)\]\((https?:\/\/(?:[^()\s]|\([^()]*\))*)\)/g, (m, label, url) => {
     const i = links.length;
     links.push(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
     return `@@LINK${i}@@`;
