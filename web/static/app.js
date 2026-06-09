@@ -44,6 +44,49 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// 依「行首縮排深度」把條列建成巢狀 <ul>/<ol>。
+// 舊版用單一 regex 把每個 <li> 攤平塞進同一層 <ul>，縮排資訊整個丟掉，
+// 導致次層 bullet 與首層擠在同一排。改用縮排堆疊：縮排變深→開新一層子清單，
+// 變淺→收掉子清單。子清單的不同 bullet 符號交給 CSS（ul ul / ul ul ul）處理。
+function renderNestedLists(text) {
+  const lines = text.split('\n');
+  const out = [];
+  const stack = []; // 每層 { indent, type:'ul'|'ol', liOpen }
+  const closeTop = () => {
+    const top = stack.pop();
+    if (top.liOpen) out.push('</li>');
+    out.push(top.type === 'ol' ? '</ol>' : '</ul>');
+  };
+  const closeTo = (indent) => { while (stack.length && stack[stack.length - 1].indent > indent) closeTop(); };
+  const closeAll = () => { while (stack.length) closeTop(); };
+  for (const line of lines) {
+    const m = line.match(/^(\s*)(\d+\.|[-*])\s+(.*)$/);
+    if (!m) { closeAll(); out.push(line); continue; }
+    const indent = m[1].length;
+    const type = /\d+\./.test(m[2]) ? 'ol' : 'ul';
+    closeTo(indent);
+    let top = stack[stack.length - 1];
+    if (top && top.indent === indent) {
+      // 同層的下一個項目：先收掉上一個 <li>
+      if (top.liOpen) { out.push('</li>'); top.liOpen = false; }
+      if (top.type !== type) { // 同縮排但清單型別不同 → 收掉重開
+        out.push(top.type === 'ol' ? '</ol>' : '</ul>');
+        stack.pop();
+        out.push(type === 'ol' ? '<ol>' : '<ul>');
+        stack.push(top = { indent, type, liOpen: false });
+      }
+    } else {
+      // 縮排變深（或第一層）→ 在目前仍開著的 <li> 內開一層子清單
+      out.push(type === 'ol' ? '<ol>' : '<ul>');
+      stack.push(top = { indent, type, liOpen: false });
+    }
+    out.push('<li>' + m[3]);
+    top.liOpen = true;
+  }
+  closeAll();
+  return out.join('\n');
+}
+
 // 簡化 markdown：**bold**、`code`、[label](url)、FAQ chip、換行、條列
 function mdToHtml(s) {
   let h = escapeHtml(s);
@@ -65,15 +108,13 @@ function mdToHtml(s) {
   h = h.replace(/\[([A-Z]{2,4}\d{2,4})\]/g, '<a class="faq-chip" data-faq-id="$1" href="javascript:void(0)">[$1]</a>');
   // bold
   h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // ordered list: 行首數字+. 變 <li>
-  h = h.replace(/(^|\n)\s*\d+\.\s+(.+)/g, '$1<li>$2</li>');
-  // unordered list: 行首 - 或 * 變 <li>
-  h = h.replace(/(^|\n)\s*[-*]\s+(.+)/g, '$1<li>$2</li>');
-  // 把連續 <li> 包成 <ul>（粗略夠用）
-  h = h.replace(/(?:<li>.*?<\/li>\s*){2,}/g, m => `<ul>${m}</ul>`);
-  h = h.replace(/<\/li>\s*<li>/g, '</li><li>');
+  // 條列：依縮排建立巢狀 <ul>/<ol>（次層自動縮排，符號由 CSS 區分）
+  h = renderNestedLists(h);
   // 換行
   h = h.replace(/\n/g, '<br>');
+  // 清掉黏在 list 區塊標籤旁的多餘 <br>，免得清單內外被塞空行
+  h = h.replace(/<br>\s*(<\/?(?:ul|ol|li)>)/g, '$1');
+  h = h.replace(/(<\/?(?:ul|ol|li)>)\s*<br>/g, '$1');
   // 還原外部連結
   h = h.replace(/@@LINK(\d+)@@/g, (m, i) => links[+i]);
   return h;

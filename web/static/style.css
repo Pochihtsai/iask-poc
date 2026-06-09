@@ -61,6 +61,12 @@ body {
 .message-bubble a { color: #2563eb; text-decoration: underline; }
 .message.user .message-bubble a { color: #dbeafe; }
 .message-bubble ul, .message-bubble ol { margin-left: 1.5rem; margin-top: 0.25rem; }
+/* 巢狀子清單：再縮排一層，並用不同的 bullet 符號區分層級 */
+.message-bubble ul ul, .message-bubble ol ol,
+.message-bubble ul ol, .message-bubble ol ul { margin-left: 1.25rem; margin-top: 0.1rem; }
+.message-bubble ul { list-style-type: disc; }
+.message-bubble ul ul { list-style-type: circle; }
+.message-bubble ul ul ul { list-style-type: square; }
 .message-bubble strong { font-weight: 600; }
 .thinking { color: #9ca3af; font-style: italic; }
 
