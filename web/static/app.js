@@ -59,9 +59,21 @@ function renderNestedLists(text) {
   };
   const closeTo = (indent) => { while (stack.length && stack[stack.length - 1].indent > indent) closeTop(); };
   const closeAll = () => { while (stack.length) closeTop(); };
+  let pendingBlanks = 0;
+  const flushBlanks = () => { while (pendingBlanks > 0) { out.push(''); pendingBlanks--; } };
   for (const line of lines) {
     const m = line.match(/^(\s*)(\d+\.|[-*])\s+(.*)$/);
-    if (!m) { closeAll(); out.push(line); continue; }
+    if (!m) {
+      // 清單中間的空行：先緩存、不要關閉清單，否則 <ol> 編號會重新從 1 開始（變成整串都是 1.）。
+      if (line.trim() === '' && stack.length) { pendingBlanks++; continue; }
+      // 有縮排、非清單標記的文字：視為上一個 <li> 的接續內容，掛在它後面，別關掉清單。
+      if (stack.length && /^\s+\S/.test(line) && stack[stack.length - 1].liOpen) {
+        flushBlanks(); out.push('<br>' + line.trim()); continue;
+      }
+      // 真正的非清單內容 → 收掉清單，並補回先前緩存的空行。
+      closeAll(); flushBlanks(); out.push(line); continue;
+    }
+    pendingBlanks = 0; // 是清單項目 → 同一份清單延續，丟掉中間緩存的空行
     const indent = m[1].length;
     const type = /\d+\./.test(m[2]) ? 'ol' : 'ul';
     closeTo(indent);
@@ -84,6 +96,7 @@ function renderNestedLists(text) {
     top.liOpen = true;
   }
   closeAll();
+  flushBlanks();
   return out.join('\n');
 }
 
