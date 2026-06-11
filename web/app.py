@@ -91,14 +91,20 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(basic_auth)) -> st
 
 # ---------------------------------------------------------- pages
 
+# HTML 入口一律 no-cache：強制瀏覽器每次都跟伺服器確認，才能讀到最新的
+# app.js?v= 指標。否則瀏覽器會快取舊 index.html、繼續載入舊版 app.js，
+# 造成「明明部署了修正、使用者卻還是看到舊行為」（例如清單編號全變 1.）。
+_NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE)
 
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(_admin: str = Depends(require_admin)) -> FileResponse:
-    return FileResponse(STATIC_DIR / "admin.html")
+    return FileResponse(STATIC_DIR / "admin.html", headers=_NO_CACHE)
 
 
 @app.get("/healthz")
