@@ -2,6 +2,11 @@
 
 const STORAGE_KEY = 'iask_session';
 
+// 目前版號：直接從載入本檔的 <script src="...app.js?v=X"> 取，與部署的靜態資源版本同步，
+// 每題答案會在右下角灰字低調標注（如 v1.08），方便回報問題時對版本。
+const APP_VERSION = (document.querySelector('script[src*="app.js"]')?.src.match(/[?&]v=([^&]+)/)?.[1]) || '';
+const VER_TAG = APP_VERSION ? `<span class="ver-tag">v${APP_VERSION}</span>` : '';
+
 const login = document.getElementById('login');
 const chat = document.getElementById('chat');
 const loginForm = document.getElementById('login-form');
@@ -186,8 +191,10 @@ function addMessage(role, text, opts = {}) {
     bubble.innerHTML =
       '<span class="thinking-dots"><span></span><span></span><span></span></span>' +
       '<span class="thinking">思考中 <span class="elapsed-running">0.0</span> 秒</span>';
+  } else if (role === 'user') {
+    bubble.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
   } else {
-    bubble.innerHTML = role === 'user' ? escapeHtml(text).replace(/\n/g, '<br>') : mdToHtml(text);
+    bubble.innerHTML = mdToHtml(text) + (VER_TAG ? `<div class="elapsed">${VER_TAG}</div>` : '');
   }
   div.appendChild(bubble);
   messages.appendChild(div);
@@ -355,7 +362,7 @@ askForm.addEventListener('submit', async (e) => {
     } else {
       // done 事件帶回含來源連結的完整答案；萬一沒收到 done 就用已累積內容收尾
       const finalAnswer = doneData ? doneData.answer : acc;
-      finishWith(mdToHtml(finalAnswer) + `<div class="elapsed">${elapsedSec} 秒</div>`);
+      finishWith(mdToHtml(finalAnswer) + `<div class="elapsed">${elapsedSec} 秒${VER_TAG ? ' · ' + VER_TAG : ''}</div>`);
     }
   } catch (err) {
     finishWith(`<span class="thinking">出錯了：${escapeHtml(err.message)}</span>`);

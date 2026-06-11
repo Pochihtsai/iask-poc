@@ -102,6 +102,8 @@ body {
   display: block; margin-top: 0.5rem;
   color: #9ca3af; font-size: 0.8rem; text-align: right;
 }
+/* 版號：比耗時更低調的極淺灰小字 */
+.ver-tag { color: #c7cad1; font-size: 0.72rem; }
 
 .chat-screen footer {
   padding: 1rem 1.5rem; background: white; border-top: 1px solid #e5e7eb;
